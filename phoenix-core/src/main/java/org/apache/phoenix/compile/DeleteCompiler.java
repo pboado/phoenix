@@ -162,7 +162,7 @@ public class DeleteCompiler {
                     table.newKey(ptr, values);
                 }
                 // When issuing deletes, we do not care about the row time ranges. Also, if the table had a row timestamp column, then the
-                // row key will already have its value. 
+                // row key will already have its value.
                 mutations.put(ptr, new RowMutationState(PRow.DELETE_MARKER, statement.getConnection().getStatementExecutionCounter(), NULL_ROWTIMESTAMP_INFO, null));
                 for (int i = 0; i < indexTableRefs.size(); i++) {
                     ImmutableBytesPtr indexPtr = new ImmutableBytesPtr(); // allocate new as this is a key in a Map
@@ -239,7 +239,7 @@ public class DeleteCompiler {
         public void setIndexTargetTableRefs(List<TableRef> indexTableRefs) {
             this.indexTableRefs = indexTableRefs;
         }
-        
+
     }
     
     private Map<PTableKey, PTable> getNonDisabledImmutableIndexes(TableRef tableRef) {
@@ -284,8 +284,9 @@ public class DeleteCompiler {
         @Override
         public MutationState execute() throws SQLException {
             MutationState state = firstPlan.execute();
+            statement.getConnection().getMutationState().join(state);
             for (MutationPlan plan : plans.subList(1, plans.size())) {
-                plan.execute();
+                statement.getConnection().getMutationState().join(plan.execute());
             }
             return state;
         }
@@ -365,7 +366,7 @@ public class DeleteCompiler {
         }
         return false;
     }
-    
+
     public MutationPlan compile(DeleteStatement delete) throws SQLException {
         final PhoenixConnection connection = statement.getConnection();
         final boolean isAutoCommit = connection.getAutoCommit();
@@ -390,7 +391,7 @@ public class DeleteCompiler {
                 tableRefToBe = resolverToBe.getTables().get(0);
                 PTable table = tableRefToBe.getTable();
                 // Cannot update:
-                // - read-only VIEW 
+                // - read-only VIEW
                 // - transactional table with a connection having an SCN
                 // TODO: SchemaUtil.isReadOnly(PTable, connection)?
                 if (table.getType() == PTableType.VIEW && table.getViewType().isReadOnly()) {
@@ -400,7 +401,7 @@ public class DeleteCompiler {
                    throw new SQLExceptionInfo.Builder(SQLExceptionCode.CANNOT_SPECIFY_SCN_FOR_TXN_TABLE).setSchemaName(schemaName)
                    .setTableName(tableName).build().buildException();
                 }
-                
+
                 immutableIndex = getNonDisabledImmutableIndexes(tableRefToBe);
                 boolean mayHaveImmutableIndexes = !immutableIndex.isEmpty();
                 noQueryReqd = !hasLimit;
@@ -411,7 +412,7 @@ public class DeleteCompiler {
                 if (runOnServer && !delete.getHint().hasHint(Hint.USE_INDEX_OVER_DATA_TABLE)) {
                     hint = HintNode.create(hint, Hint.USE_DATA_OVER_INDEX_TABLE);
                 }
-        
+
                 List<AliasedNode> aliasedNodes = Lists.newArrayListWithExpectedSize(table.getPKColumns().size());
                 boolean isSalted = table.getBucketNum() != null;
                 boolean isMultiTenant = connection.getTenantId() != null && table.isMultiTenant();
@@ -526,10 +527,10 @@ public class DeleteCompiler {
                 runOnServer = false;
                 noQueryReqd = false; // FIXME: why set this to false in this case?
             }
-            
+
             final int maxSize = services.getProps().getInt(QueryServices.MAX_MUTATION_SIZE_ATTRIB,QueryServicesOptions.DEFAULT_MAX_MUTATION_SIZE);
             final int maxSizeBytes = services.getProps().getInt(QueryServices.MAX_MUTATION_SIZE_BYTES_ATTRIB,QueryServicesOptions.DEFAULT_MAX_MUTATION_SIZE_BYTES);
-     
+
             final StatementContext context = plan.getContext();
             // If we're doing a query for a set of rows with no where clause, then we don't need to contact the server at all.
             // A simple check of the none existence of a where clause in the parse node is not sufficient, as the where clause
@@ -555,7 +556,7 @@ public class DeleteCompiler {
                         while (iterator.hasNext()) {
                             mutation.put(new ImmutableBytesPtr(iterator.next().getLowerRange()), new RowMutationState(PRow.DELETE_MARKER, statement.getConnection().getStatementExecutionCounter(), NULL_ROWTIMESTAMP_INFO, null));
                         }
-                        return new MutationState(tableRef, mutation, 0, maxSize, maxSizeBytes, connection);
+                        return new MutationState(plan.getTableRef(), mutation, 0, maxSize, maxSizeBytes, connection);
                     }
     
                     @Override
@@ -603,7 +604,7 @@ public class DeleteCompiler {
                 // TODO: better abstraction
                 Scan scan = context.getScan();
                 scan.setAttribute(BaseScannerRegionObserver.DELETE_AGG, QueryConstants.TRUE);
-    
+
                 // Build an ungrouped aggregate query: select COUNT(*) from <table> where <where>
                 // The coprocessor will delete each row returned from the scan
                 // Ignoring ORDER BY, since with auto commit on and no limit makes no difference
@@ -621,12 +622,12 @@ public class DeleteCompiler {
                     public ParameterMetaData getParameterMetaData() {
                         return context.getBindManager().getParameterMetaData();
                     }
-    
+
                     @Override
                     public StatementContext getContext() {
                         return context;
                     }
-    
+
                     @Override
                     public TableRef getTargetRef() {
                         return dataTableRef;
@@ -676,7 +677,7 @@ public class DeleteCompiler {
                             }
                         }
                     }
-    
+
                     @Override
                     public ExplainPlan getExplainPlan() throws SQLException {
                         List<String> queryPlanSteps =  aggPlan.getExplainPlan().getPlanSteps();
@@ -715,12 +716,12 @@ public class DeleteCompiler {
                     public ParameterMetaData getParameterMetaData() {
                         return context.getBindManager().getParameterMetaData();
                     }
-    
+
                     @Override
                     public StatementContext getContext() {
                         return context;
                     }
-    
+
                     @Override
                     public TableRef getTargetRef() {
                         return dataTableRef;
@@ -768,7 +769,7 @@ public class DeleteCompiler {
                             iterator.close();
                         }
                     }
-    
+
                     @Override
                     public ExplainPlan getExplainPlan() throws SQLException {
                         List<String> queryPlanSteps =  plan.getExplainPlan().getPlanSteps();

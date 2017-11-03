@@ -18,6 +18,7 @@
 package org.apache.phoenix.end2end;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -333,7 +334,7 @@ public class DeleteIT extends ParallelStatsDisabledIT {
             if (!autoCommit) {
                 con.commit();
             }
-            
+
             ResultSet rs = con.createStatement().executeQuery("SELECT /*+ NO_INDEX */ count(*) FROM " + tableName);
             assertTrue(rs.next());
             assertEquals(0, rs.getLong(1));
@@ -363,6 +364,96 @@ public class DeleteIT extends ParallelStatsDisabledIT {
         testDeleteRowFromTableWithImmutableIndex(true);
     }
     
+    @Test
+    public void testPointDeleteRowFromTableWithImmutableIndex() throws Exception {
+        testPointDeleteRowFromTableWithImmutableIndex(false, false);
+    }
+
+    @Test
+    public void testPointDeleteRowFromTableWithLocalImmutableIndex() throws Exception {
+        testPointDeleteRowFromTableWithImmutableIndex(true, false);
+    }
+
+    @Test
+    public void testPointDeleteRowFromTableWithImmutableIndex2() throws Exception {
+        testPointDeleteRowFromTableWithImmutableIndex(false, true);
+    }
+
+    public void testPointDeleteRowFromTableWithImmutableIndex(boolean localIndex, boolean addNonPKIndex) throws Exception {
+        Connection con = null;
+        try {
+            boolean autoCommit = false;
+            con = DriverManager.getConnection(getUrl());
+            con.setAutoCommit(autoCommit);
+
+            Statement stm = con.createStatement();
+
+            String tableName = generateUniqueName();
+            String indexName1 = generateUniqueName();
+            String indexName2 = generateUniqueName();
+            String indexName3 = addNonPKIndex? generateUniqueName() : null;
+
+            stm.execute("CREATE TABLE IF NOT EXISTS " + tableName + " (" +
+                    "HOST CHAR(2) NOT NULL," +
+                    "DOMAIN VARCHAR NOT NULL, " +
+                    "FEATURE VARCHAR NOT NULL, " +
+                    "\"DATE\" DATE NOT NULL, \n" +
+                    "USAGE.CORE BIGINT," +
+                    "USAGE.DB BIGINT," +
+                    "STATS.ACTIVE_VISITOR INTEGER " +
+                    "CONSTRAINT PK PRIMARY KEY (HOST, DOMAIN, FEATURE, \"DATE\")) IMMUTABLE_ROWS=true");
+            stm.execute("CREATE " + (localIndex ? "LOCAL" : "") + " INDEX " + indexName1 + " ON " + tableName + " (\"DATE\", FEATURE)");
+            stm.execute("CREATE " + (localIndex ? "LOCAL" : "") + " INDEX " + indexName2 + " ON " + tableName + " (FEATURE, DOMAIN)");
+            if (addNonPKIndex) {
+                stm.execute("CREATE " + (localIndex ? "LOCAL" : "") + " INDEX " + indexName3 + " ON " + tableName + " (\"DATE\", FEATURE, USAGE.DB)");
+            }
+
+            Date date = new Date(0);
+            PreparedStatement psInsert = con
+                    .prepareStatement("UPSERT INTO " + tableName + "(HOST, DOMAIN, FEATURE, \"DATE\", CORE, DB, ACTIVE_VISITOR) VALUES(?,?, ? , ?, ?, ?, ?)");
+            psInsert.setString(1, "AA");
+            psInsert.setString(2, "BB");
+            psInsert.setString(3, "CC");
+            psInsert.setDate(4, date);
+            psInsert.setLong(5, 1L);
+            psInsert.setLong(6, 2L);
+            psInsert.setLong(7, 3);
+            psInsert.execute();
+            if (!autoCommit) {
+                con.commit();
+            }
+
+            String dml = "DELETE FROM " + tableName + " WHERE (HOST, DOMAIN, FEATURE, \"DATE\") = (?,?,?,?)";
+            PreparedStatement psDelete = con.prepareStatement(dml);
+            psDelete.setString(1, "AA");
+            psDelete.setString(2, "BB");
+            psDelete.setString(3, "CC");
+            psDelete.setDate(4, date);
+            psDelete.execute();
+            if (!autoCommit) {
+                con.commit();
+            }
+            psDelete = con.prepareStatement("EXPLAIN " + dml);
+            psDelete.setString(1, "AA");
+            psDelete.setString(2, "BB");
+            psDelete.setString(3, "CC");
+            psDelete.setDate(4, date);
+            String explainPlan = QueryUtil.getExplainPlan(psDelete.executeQuery());
+            if (addNonPKIndex) {
+                assertNotEquals("DELETE SINGLE ROW", explainPlan);
+            } else {
+                assertEquals("DELETE SINGLE ROW", explainPlan);
+            }
+
+            assertDeleted(con, tableName, indexName1, indexName2, indexName3);
+        } finally {
+            try {
+                con.close();
+            } catch (Exception ex) {
+            }
+        }
+    }
+
     public void testDeleteRowFromTableWithImmutableIndex(boolean localIndex) throws SQLException {
         Connection con = null;
         try {
@@ -414,7 +505,7 @@ public class DeleteIT extends ParallelStatsDisabledIT {
             if (!autoCommit) {
                 con.commit();
             }
-            
+
             ResultSet rs = con.createStatement().executeQuery("SELECT /*+ NO_INDEX */ count(*) FROM " + tableName);
             assertTrue(rs.next());
             assertEquals(0, rs.getLong(1));
@@ -440,8 +531,29 @@ public class DeleteIT extends ParallelStatsDisabledIT {
             }
         }
     }
-    
-    
+
+    private static void assertDeleted(Connection con, String tableName, String indexName1, String indexName2, String indexName3)
+            throws SQLException {
+        ResultSet rs;
+        rs = con.createStatement().executeQuery("SELECT /*+ NO_INDEX */ count(*) FROM " + tableName);
+        assertTrue(rs.next());
+        assertEquals(0, rs.getLong(1));
+
+        rs = con.createStatement().executeQuery("SELECT count(*) FROM " + indexName1);
+        assertTrue(rs.next());
+        assertEquals(0, rs.getLong(1));
+
+        rs = con.createStatement().executeQuery("SELECT count(*) FROM " + indexName2);
+        assertTrue(rs.next());
+        assertEquals(0, rs.getLong(1));
+
+        if (indexName3 != null) {
+            rs = con.createStatement().executeQuery("SELECT count(*) FROM " + indexName3);
+            assertTrue(rs.next());
+            assertEquals(0, rs.getLong(1));
+        }
+    }
+
     @Test
     public void testDeleteAllFromTableNoAutoCommit() throws SQLException {
         testDeleteAllFromTable(false);
